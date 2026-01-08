@@ -15,6 +15,10 @@ func main() {
 		reader := bufio.NewReader(os.Stdin)
 		command, err := reader.ReadString('\n')
 
+		if command == "exit\n" {
+			os.Exit(0)
+		}
+
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error reading output:", err)
 			os.Exit(1)
