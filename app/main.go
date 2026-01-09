@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -43,11 +44,32 @@ func handleInput() {
 	case "echo":
 		fmt.Print(input[5:])
 	case "type":
-		if slices.Contains(builtinCommands, splitInput[1]) {
-			fmt.Println(splitInput[1] + " is a shell builtin")
-		} else {
-			fmt.Println(splitInput[1] + ": not found")
+		c := splitInput[1]
+		if slices.Contains(builtinCommands, c) {
+			fmt.Println(c + " is a shell builtin")
+			return
 		}
+
+		path := os.Getenv(("PATH"))
+		directories := strings.Split(path, string(os.PathListSeparator))
+
+		// for range loop -> used to iterate over collections
+		// range returns index and value for every item
+		for _, dir := range directories {
+			fullPath := filepath.Join(dir, c)
+
+			// check if file with command name exists and its permissions
+			info, err := os.Stat(fullPath)
+			if err == nil {
+				if !info.IsDir() && info.Mode().Perm()&0111 != 0 {
+					fmt.Println(c + " is " + fullPath)
+					return
+				}
+			}
+
+		}
+
+		fmt.Println(c + ": not found")
 
 	default:
 		fmt.Println(command + ": command not found")
