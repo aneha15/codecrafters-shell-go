@@ -52,8 +52,12 @@ func handleExternal(c string, args []string) {
 	fmt.Println(c + ": command not found")
 }
 
-func handleCd(dir string) {
-	path := dir
+func handleCd(args []string) {
+	path := "~"
+	if args != nil {
+		path = args[0]
+	}
+
 	// find home dir
 	if path == "~" {
 		homeDir, err := os.UserHomeDir()
@@ -61,12 +65,35 @@ func handleCd(dir string) {
 			path = homeDir
 		}
 	}
-
 	// change dir
 	err := os.Chdir(path)
 	if err != nil {
-		fmt.Println("cd: " + dir + ": No such file or directory")
+		fmt.Println("cd: " + path + ": No such file or directory")
 	}
+}
+
+func parseInput(input string) []string {
+	var parts []string
+	var current strings.Builder
+	inQuotes := false
+
+	for _, char := range input {
+		if char == '\'' {
+			inQuotes = !inQuotes
+		} else if char == ' ' && !inQuotes {
+			// when space reached out of single quotes, current arg is over
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+		} else {
+			current.WriteRune(char)
+		}
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	return parts
 }
 
 func handleInput() {
@@ -78,26 +105,23 @@ func handleInput() {
 		os.Exit(1)
 	}
 
-	splitInput := strings.Split(input[:len(input)-1], " ")
+	splitInput := parseInput(input[:len(input)-1])
 	command := splitInput[0]
+	args := splitInput[1:]
 
 	switch command {
 	case "exit":
 		os.Exit(0)
 	case "echo":
-		fmt.Print(input[5:])
+		fmt.Println(strings.Join(args, " "))
 	case "type":
-		handleType(splitInput[1])
+		handleType(args[0])
 	case "pwd":
 		dir, _ := os.Getwd()
 		fmt.Println(dir)
 	case "cd":
-		if len(splitInput) == 1 {
-			handleCd("~")
-		} else {
-			handleCd(splitInput[1])
-		}
+		handleCd(args)
 	default:
-		handleExternal(command, splitInput[1:])
+		handleExternal(command, args)
 	}
 }
