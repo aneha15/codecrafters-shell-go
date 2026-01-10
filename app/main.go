@@ -13,7 +13,6 @@ import (
 var _ = fmt.Print
 
 func main() {
-
 	for {
 		printPrompt()
 		handleInput()
@@ -75,22 +74,54 @@ func handleCd(args []string) {
 func parseInput(input string) []string {
 	var parts []string
 	var current strings.Builder
-	inQuotes := false
+	var active rune = 0
+	escaped := false
+	inToken := false
 
 	for _, char := range input {
-		if char == '\'' {
-			inQuotes = !inQuotes
-		} else if char == ' ' && !inQuotes {
-			// when space reached out of single quotes, current arg is over
-			if current.Len() > 0 {
+		if escaped {
+			current.WriteRune(char)
+			escaped = false
+			inToken = true
+			continue
+		}
+
+		if char == '\\' {
+			escaped = true
+			inToken = true
+			continue
+		}
+
+		quote := char == '\'' || char == '"'
+		if quote {
+			switch active {
+			case 0:
+				// opening quote
+				active = char
+				inToken = true
+			case char:
+				// closing quote
+				active = 0
+				inToken = true
+			default:
+				current.WriteRune(char)
+			}
+		} else if char == ' ' {
+			if active != 0 {
+				current.WriteRune(char)
+			} else if inToken {
+				// at a space outside quotes => end of word
 				parts = append(parts, current.String())
 				current.Reset()
+				inToken = false
 			}
 		} else {
 			current.WriteRune(char)
+			inToken = true
 		}
 	}
-	if current.Len() > 0 {
+
+	if inToken {
 		parts = append(parts, current.String())
 	}
 	return parts
@@ -105,9 +136,9 @@ func handleInput() {
 		os.Exit(1)
 	}
 
-	splitInput := parseInput(input[:len(input)-1])
-	command := splitInput[0]
-	args := splitInput[1:]
+	parts := parseInput(input[:len(input)-1])
+	command := parts[0]
+	args := parts[1:]
 
 	switch command {
 	case "exit":
