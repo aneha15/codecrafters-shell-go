@@ -4,15 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"slices"
 	"strings"
 )
 
 // Ensures gofmt doesn't remove the "fmt" import in stage 1 (feel free to remove this!)
 var _ = fmt.Print
-
-var builtinCommands = []string{"echo", "exit", "type"}
 
 func main() {
 
@@ -38,6 +36,8 @@ func handleInput() {
 	splitInput := strings.Split(input[:len(input)-1], " ")
 	command := splitInput[0]
 
+	builtinCommands := []string{"echo", "exit", "type"}
+
 	switch command {
 	case "exit":
 		os.Exit(0)
@@ -50,29 +50,22 @@ func handleInput() {
 			return
 		}
 
-		path := os.Getenv(("PATH"))
-		directories := strings.Split(path, string(os.PathListSeparator))
-
-		// for range loop -> used to iterate over collections
-		// range returns index and value for every item
-		for _, dir := range directories {
-			fullPath := filepath.Join(dir, c)
-
-			// check if file with command name exists and its permissions
-			info, err := os.Stat(fullPath)
-			if err == nil {
-				if !info.IsDir() && info.Mode().Perm()&0111 != 0 {
-					fmt.Println(c + " is " + fullPath)
-					return
-				}
-			}
-
+		fullPath, err := exec.LookPath(c)
+		if err == nil {
+			fmt.Println(c + " is " + fullPath)
+			return
 		}
-
 		fmt.Println(c + ": not found")
-
 	default:
+		_, err := exec.LookPath(command)
+		if err == nil {
+			cmd := exec.Command(command, splitInput[1:]...)
+
+			// connect to terminal
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+			cmd.Run()
+			return
+		}
 		fmt.Println(command + ": command not found")
 	}
-
 }
