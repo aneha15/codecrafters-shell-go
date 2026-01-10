@@ -36,7 +36,7 @@ func handleInput() {
 	splitInput := strings.Split(input[:len(input)-1], " ")
 	command := splitInput[0]
 
-	builtinCommands := []string{"echo", "exit", "type"}
+	builtinCommands := []string{"echo", "exit", "type", "pwd"}
 
 	switch command {
 	case "exit":
@@ -56,6 +56,10 @@ func handleInput() {
 			return
 		}
 		fmt.Println(c + ": not found")
+	case "pwd":
+		dir, _ := os.Getwd()
+		fmt.Println(dir)
+
 	default:
 		_, err := exec.LookPath(command)
 		if err == nil {
