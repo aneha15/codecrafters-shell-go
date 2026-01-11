@@ -78,39 +78,46 @@ func parseInput(input string) []string {
 	escaped := false
 	inToken := false
 
+	specialChars := []rune{'"', '$', '`', '\\'}
+
 	for _, char := range input {
 		if escaped {
-			current.WriteRune(char)
+			if active == '"' && slices.Contains(specialChars, char) {
+				current.WriteRune(char)
+			} else if active == '"' {
+				current.WriteRune('\\')
+				current.WriteRune(char)
+			} else {
+				current.WriteRune(char)
+			}
 			escaped = false
 			inToken = true
 			continue
 		}
 
 		if char == '\\' {
-			escaped = true
+			if active == '\'' {
+				current.WriteRune(char)
+			} else {
+				escaped = true
+			}
 			inToken = true
 			continue
 		}
 
-		quote := char == '\'' || char == '"'
-		if quote {
-			switch active {
-			case 0:
-				// opening quote
+		if char == '\'' || char == '"' {
+			if active == 0 {
 				active = char
-				inToken = true
-			case char:
-				// closing quote
+			} else if active == char {
 				active = 0
-				inToken = true
-			default:
+			} else {
 				current.WriteRune(char)
 			}
+			inToken = true
 		} else if char == ' ' {
 			if active != 0 {
 				current.WriteRune(char)
 			} else if inToken {
-				// at a space outside quotes => end of word
 				parts = append(parts, current.String())
 				current.Reset()
 				inToken = false
@@ -124,6 +131,7 @@ func parseInput(input string) []string {
 	if inToken {
 		parts = append(parts, current.String())
 	}
+
 	return parts
 }
 
