@@ -1,14 +1,24 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
+
+	"github.com/chzyer/readline"
 )
+
+// shell
+type Shell struct {
+	builtins     map[string]func(*Command, io.Writer) error
+	rl           *readline.Instance
+	pathCommands []string
+}
 
 // parsed command
 type Command struct {
@@ -23,17 +33,256 @@ type Redirection struct {
 	Append   bool // true for >>, false for >
 }
 
-// shell
-type Shell struct {
-	builtins map[string]func(*Command, io.Writer) error
-}
-
 func NewShell() *Shell {
 	s := &Shell{
 		builtins: make(map[string]func(*Command, io.Writer) error),
 	}
 	s.registerBuiltins()
+	s.refreshPathCmds()
+	s.setupReadline()
 	return s
+}
+
+func (s *Shell) refreshPathCmds() {
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		s.pathCommands = []string{}
+		return
+	}
+
+	paths := strings.Split(pathEnv, ":")
+	cmdSet := make(map[string]bool)
+
+	for _, dir := range paths {
+		entries, err := os.ReadDir(dir)
+
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			// check if executable
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+
+			// check execute permission
+			if info.Mode()&0111 != 0 {
+				cmdSet[entry.Name()] = true
+			}
+		}
+	}
+	// convert map to a slice
+	s.pathCommands = make([]string, 0, len(cmdSet))
+	for cmd := range cmdSet {
+		s.pathCommands = append(s.pathCommands, cmd)
+	}
+}
+
+func (s *Shell) setupReadline() {
+	var err error
+
+	s.rl, err = readline.NewEx(&readline.Config{
+		Prompt:            "$ ",
+		HistoryFile:       "/tmp/.shell_history", // sets location to save history
+		AutoComplete:      s.getCompleter(),      // tab completion logic
+		InterruptPrompt:   "^C",                  // shows on ctrl+c
+		EOFPrompt:         "exit",                // shows on ctrl+d
+		HistorySearchFold: true,                  // case-insensitive search
+		FuncFilterInputRune: func(r rune) (rune, bool) { // any custom filters for input
+			return r, true // no filters for now
+		},
+	})
+
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (s *Shell) getCompleter() readline.AutoCompleter {
+	return &shellCompleter{shell: s}
+}
+
+type shellCompleter struct {
+	shell *Shell
+}
+
+func (c *shellCompleter) Do(line []rune, pos int) (newLine [][]rune, length int) {
+	lineStr := string(line[:pos])
+	fields := strings.Fields(lineStr)
+
+	if len(fields) == 0 {
+		// empty line => complete command
+		return c.completeCommand(""), 0
+	}
+
+	// check if we are trying to complete command (first word)
+	isCmd := len(fields) == 1 && !strings.HasSuffix(lineStr, " ")
+
+	if isCmd {
+		return c.completeCommand(fields[0]), len(fields[0])
+	}
+
+	// not command => completing last argument
+	cmdName := fields[0]
+	last := ""
+	if len(fields) > 1 {
+		last = fields[len(fields)-1]
+	}
+
+	// if line ends with a space => new arg
+	if strings.HasSuffix(lineStr, " ") {
+		last = ""
+	}
+
+	switch cmdName {
+	case "cd":
+		// complete directories
+		return c.completeDirectory(last), len(last)
+	case "type":
+		// complete cmd names
+		return c.completeCommand(last), len(last)
+	default:
+		// complete files
+		return c.completeFiles(last), len(last)
+	}
+}
+
+func (c *shellCompleter) completeCommand(prefix string) [][]rune {
+	matchMap := make(map[string]bool)
+
+	// check builtins
+	for name := range c.shell.builtins {
+		if strings.HasPrefix(name, prefix) {
+			matchMap[name] = true
+		}
+	}
+
+	// check PATH commands
+	for _, cmd := range c.shell.pathCommands {
+		if strings.HasPrefix(cmd, prefix) {
+			matchMap[cmd] = true
+		}
+	}
+
+	// convert to slice
+	matches := make([]string, 0, len(matchMap))
+	for name := range matchMap {
+		matches = append(matches, name)
+	}
+
+	sort.Strings(matches)
+
+	// convert to readline format
+	return c.convertMatches(matches, prefix)
+}
+
+func (c *shellCompleter) completeFiles(prefix string) [][]rune {
+	dir := "."
+	filePrefix := prefix
+
+	// handles dir/file paths
+	if strings.Contains(prefix, "/") {
+		dir = filepath.Dir(prefix)
+		filePrefix = filepath.Base(prefix)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return [][]rune{}
+	}
+
+	var matches []string
+	for _, entry := range entries {
+		name := entry.Name()
+
+		// skip hidden files unless prefix starts with dot
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(filePrefix, ".") {
+			continue
+		}
+
+		if strings.HasPrefix(name, filePrefix) {
+			fullPath := name
+			if dir != "." {
+				fullPath = filepath.Join(dir, name)
+			}
+
+			// add trailing slash for directories only
+			if entry.IsDir() {
+				fullPath += "/"
+			}
+
+			matches = append(matches, fullPath)
+		}
+	}
+
+	sort.Strings(matches)
+	return c.convertMatches(matches, prefix)
+}
+
+func (c *shellCompleter) completeDirectory(prefix string) [][]rune {
+	dir := "."
+	filePrefix := prefix
+
+	if strings.Contains(prefix, "/") {
+		dir = filepath.Dir(prefix)
+		filePrefix = filepath.Base(prefix)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return [][]rune{}
+	}
+
+	var matches []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+
+		// skip hidden dirs unless prefix starts with dot
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(filePrefix, ".") {
+			continue
+		}
+
+		if strings.HasPrefix(name, filePrefix) {
+			fullPath := name + "/"
+			if dir != "." {
+				fullPath = filepath.Join(dir, name) + "/"
+			}
+			matches = append(matches, fullPath)
+		}
+	}
+
+	sort.Strings(matches)
+	return c.convertMatches(matches, prefix)
+}
+
+func (c *shellCompleter) convertMatches(matches []string, prefix string) [][]rune {
+	if len(matches) == 0 {
+		return [][]rune{}
+	}
+
+	result := make([][]rune, len(matches))
+	for i, match := range matches {
+		// completion only
+		suffix := match[len(prefix):]
+
+		// Add trailing space for single match (not directories)
+		if len(matches) == 1 && !strings.HasSuffix(suffix, "/") {
+			suffix += " "
+		}
+
+		result[i] = []rune(suffix)
+	}
+	return result
 }
 
 func (s *Shell) registerBuiltins() {
@@ -44,17 +293,65 @@ func (s *Shell) registerBuiltins() {
 	s.builtins["cd"] = s.cmdCd
 }
 
-func (s *Shell) Run() {
-	for {
-		fmt.Print("$ ")
-		cmd, err := s.readCommand()
+func (s *Shell) readCommandFromString(input string) (*Command, error) {
+	if input == "" {
+		return nil, nil
+	}
 
-		// error present
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error reading input:", err)
+	tokens := parseInput(input)
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+
+	// handle redirection
+	cleanedArgs, redirects, err := handleRedirection(tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(cleanedArgs) == 0 {
+		return nil, fmt.Errorf("no command specified")
+	}
+
+	cmd := &Command{
+		Name:         cleanedArgs[0],
+		Args:         cleanedArgs[1:],
+		Redirections: redirects,
+	}
+
+	return cmd, nil
+}
+
+func (s *Shell) Run() {
+	defer s.rl.Close()
+
+	for {
+		line, err := s.rl.Readline()
+
+		if err == readline.ErrInterrupt {
+			// ctrl + c pressed
+			continue
+		} else if err == io.EOF {
+			// ctrl + d pressed
+			break
+		} else if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+			break
+		}
+
+		// skip empty lines
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
-		// empty input
+
+		// parse and execute
+		cmd, err := s.readCommandFromString(line)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			continue
+		}
+
 		if cmd == nil {
 			continue
 		}
@@ -267,46 +564,6 @@ func handleRedirection(tokens []string) (cleanedArgs []string, redirects []Redir
 	}
 
 	return cleanedArgs, redirects, nil
-}
-
-func (s *Shell) readCommand() (*Command, error) {
-	reader := bufio.NewReader(os.Stdin)
-	input, err := reader.ReadString('\n')
-
-	if err != nil {
-		return nil, err
-	}
-
-	input = strings.TrimSuffix(input, "\n")
-
-	if input == "" {
-		return nil, nil
-	}
-
-	tokens := parseInput(input)
-
-	if len(tokens) == 0 {
-		return nil, nil
-	}
-
-	// handle redirection
-	cleanedArgs, redirects, err := handleRedirection(tokens)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if len(cleanedArgs) == 0 {
-		return nil, fmt.Errorf("no command specified")
-	}
-
-	cmd := &Command{
-		Name:         cleanedArgs[0],
-		Args:         cleanedArgs[1:],
-		Redirections: redirects,
-	}
-
-	return cmd, nil
 }
 
 func (s *Shell) executeCommand(cmd *Command) {
