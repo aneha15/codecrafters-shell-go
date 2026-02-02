@@ -176,6 +176,14 @@ func (c *shellCompleter) completeCommand(prefix string) [][]rune {
 		matches = append(matches, name)
 	}
 
+	if len(matches) == 0 {
+		if c.shell.rl != nil && c.shell.rl.Terminal != nil {
+			c.shell.rl.Terminal.Bell()
+		}
+
+		return [][]rune{}
+	}
+
 	sort.Strings(matches)
 
 	// convert to readline format
